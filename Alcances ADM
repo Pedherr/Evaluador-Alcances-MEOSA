@@ -1,0 +1,277 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { Download, Filter, Search, Menu, CheckCircle2, MinusCircle, Users, Share2 } from 'lucide-react';
+import { INITIAL_DATA } from './constants';
+import { ImportanceLevel, ServiceRequest } from './types';
+import { RequestCard } from './components/RequestCard';
+import { Dashboard } from './components/Dashboard';
+
+enum FilterState {
+  ALL = 'all',
+  PENDING = 'pending',
+  REVIEWED = 'reviewed',
+}
+
+const App: React.FC = () => {
+  const [data, setData] = useState<ServiceRequest[]>(INITIAL_DATA);
+  const [filter, setFilter] = useState<FilterState>(FilterState.ALL);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isScrolled, setIsScrolled] = useState(false);
+
+  // Scroll detection for sticky header styling
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 10);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const handleUpdateImportance = (id: string, level: ImportanceLevel) => {
+    setData(prev => prev.map(item => 
+      item.id === id ? { ...item, importance: level } : item
+    ));
+  };
+
+  // Filter Logic
+  const filteredData = useMemo(() => {
+    return data.filter(item => {
+        const matchesSearch = 
+            item.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            item.sapId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            item.area.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            item.requester.toLowerCase().includes(searchTerm.toLowerCase());
+
+        if (!matchesSearch) return false;
+
+        if (filter === FilterState.PENDING) return item.importance === ImportanceLevel.UNSET;
+        if (filter === FilterState.REVIEWED) return item.importance !== ImportanceLevel.UNSET;
+        return true;
+    });
+  }, [data, filter, searchTerm]);
+
+  // Grouping Logic: Group filtered data by requester
+  const groupedData = useMemo(() => {
+    return filteredData.reduce((acc, item) => {
+        const key = item.requester || 'Sin Asignar';
+        if (!acc[key]) {
+            acc[key] = [];
+        }
+        acc[key].push(item);
+        return acc;
+    }, {} as Record<string, ServiceRequest[]>);
+  }, [filteredData]);
+
+  // Calculation Logic
+  const importantItems = data.filter(i => i.importance === ImportanceLevel.IMPORTANT);
+  const notImportantItems = data.filter(i => i.importance === ImportanceLevel.NOT_IMPORTANT);
+
+  // Identify unique owners involved in selected items (Important OR Not Important)
+  const activeOwners = new Set(
+    data
+        .filter(i => i.importance === ImportanceLevel.IMPORTANT || i.importance === ImportanceLevel.NOT_IMPORTANT)
+        .map(i => i.requester)
+  );
+
+  const hoursImportant = importantItems.length * 2;
+  const hoursNotImportant = notImportantItems.length * 2;
+  const hoursMeetings = activeOwners.size * 1; // 1 hour per owner involved
+  const totalEstimatedHours = hoursImportant + hoursNotImportant + hoursMeetings;
+
+  const handleExport = async () => {
+    const summaryTextImportant = importantItems.map(i => `[PRIORIDAD] ${i.sapId} (${i.requester}): ${i.description}`).join('\n');
+    const summaryTextNotImportant = notImportantItems.map(i => `[SECUNDARIO] ${i.sapId} (${i.requester}): ${i.description}`).join('\n');
+    
+    // Create list of owners for the report
+    const ownersList = Array.from(activeOwners).map(o => `- ${o}`).join('\n');
+
+    // Create detailed export content
+    const fileContent = `REPORTE DE SELECCIÓN MEOSA
+===========================================
+Fecha: ${new Date().toLocaleDateString()}
+
+RESUMEN DE TIEMPOS DE LEVANTAMIENTO
+-------------------------------------------
+1. Levantamiento en Campo (Prioridad):  ${hoursImportant} Horas (2h x ${importantItems.length} alcances)
+2. Levantamiento en Campo (Secundario): ${hoursNotImportant} Horas (2h x ${notImportantItems.length} alcances)
+3. Juntas de Alineación con Usuarios:   ${hoursMeetings} Horas (1h x ${activeOwners.size} usuarios)
+
+TIEMPO TOTAL ESTIMADO:                  ${totalEstimatedHours} Horas
+-------------------------------------------
+
+USUARIOS INVOLUCRADOS (1hr Junta c/u):
+${ownersList}
+
+
+DETALLE DE ALCANCES - PRIORIDAD ALTA
+-------------------------------------------
+${importantItems.length > 0 ? summaryTextImportant : '(Ninguno seleccionado)'}
+
+
+DETALLE DE ALCANCES - NO URGENTES
+-------------------------------------------
+${notImportantItems.length > 0 ? summaryTextNotImportant : '(Ninguno seleccionado)'}
+`;
+
+    // Try to use the native Web Share API (Mobile friendly)
+    if (navigator.share && navigator.canShare && navigator.canShare({ text: fileContent })) {
+      try {
+        await navigator.share({
+          title: 'Plan de Levantamiento MEOSA',
+          text: fileContent,
+        });
+        return; // Success, exit function
+      } catch (error) {
+        console.log('Error sharing:', error);
+        // Fallback to download if user cancelled or error
+      }
+    }
+
+    // Fallback: Download as text file
+    const blob = new Blob([fileContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `MEOSA_Plan_Levantamiento_${new Date().toISOString().slice(0,10)}.txt`;
+    a.click();
+  };
+
+  return (
+    <div className="min-h-screen pb-32 md:pb-24">
+      {/* Header */}
+      <header className={`fixed top-0 left-0 right-0 z-50 transition-all duration-200 ${isScrolled ? 'bg-white shadow-md py-3' : 'bg-slate-50 py-4'}`}>
+        <div className="max-w-3xl mx-auto px-4 flex justify-between items-center">
+            <div className="flex items-center gap-3">
+                <div className="bg-blue-600 p-2 rounded-lg text-white">
+                    <Menu size={20} />
+                </div>
+                <div>
+                    <h1 className="text-lg font-bold text-slate-800 leading-none">Evaluador MEOSA</h1>
+                    <p className="text-xs text-slate-500 mt-0.5">Gestión de priorización de propuestas comerciales</p>
+                </div>
+            </div>
+            <button 
+                onClick={handleExport}
+                className="text-blue-600 p-2 rounded-full hover:bg-blue-50"
+                aria-label="Exportar"
+            >
+                <Share2 size={22} />
+            </button>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-3xl mx-auto px-4 pt-20">
+        <Dashboard data={data} />
+
+        {/* Filters & Search */}
+        <div className="sticky top-[72px] z-40 bg-slate-50/95 backdrop-blur-sm py-2 mb-4 -mx-4 px-4 border-b border-slate-100">
+            <div className="relative mb-3">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input 
+                    type="text" 
+                    placeholder="Buscar por Solicitante, ID o área..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+            </div>
+            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                <button 
+                    onClick={() => setFilter(FilterState.ALL)}
+                    className={`px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filter === FilterState.ALL ? 'bg-slate-800 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-600'}`}
+                >
+                    Todos ({data.length})
+                </button>
+                <button 
+                    onClick={() => setFilter(FilterState.PENDING)}
+                    className={`px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filter === FilterState.PENDING ? 'bg-slate-800 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-600'}`}
+                >
+                    Pendientes ({data.filter(i => i.importance === ImportanceLevel.UNSET).length})
+                </button>
+                <button 
+                    onClick={() => setFilter(FilterState.REVIEWED)}
+                    className={`px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filter === FilterState.REVIEWED ? 'bg-slate-800 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-600'}`}
+                >
+                    Revisados ({data.filter(i => i.importance !== ImportanceLevel.UNSET).length})
+                </button>
+            </div>
+        </div>
+
+        {/* Grouped List */}
+        <div className="space-y-6">
+            {Object.keys(groupedData).length > 0 ? (
+                (Object.entries(groupedData) as [string, ServiceRequest[]][]).map(([requester, items]) => (
+                    <div key={requester} className="animate-in fade-in duration-500">
+                        <div className="flex items-center gap-2 mb-3 ml-1 sticky top-[135px] z-30 py-2 bg-slate-50/90 backdrop-blur w-fit pr-4 rounded-r-full">
+                            <div className="bg-indigo-100 p-1.5 rounded-full">
+                                <Users size={14} className="text-indigo-600" />
+                            </div>
+                            <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">
+                                {requester} 
+                                <span className="ml-2 text-slate-400 font-normal text-xs normal-case">({items.length} items)</span>
+                            </h2>
+                        </div>
+                        <div className="space-y-3">
+                            {items.map(item => (
+                                <RequestCard 
+                                    key={item.id} 
+                                    item={item} 
+                                    onUpdate={handleUpdateImportance}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                ))
+            ) : (
+                <div className="text-center py-12 text-slate-400">
+                    <Filter size={48} className="mx-auto mb-3 opacity-20" />
+                    <p>No se encontraron cotizaciones con los filtros actuales.</p>
+                </div>
+            )}
+        </div>
+      </main>
+
+      {/* Sticky Bottom Action */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-3 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-50">
+        <div className="max-w-3xl mx-auto flex flex-col gap-2">
+            
+            <div className="flex justify-between items-center w-full mb-1">
+                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Estimado</span>
+                 <div className="flex items-baseline gap-1">
+                    <span className="text-2xl font-black text-slate-900">{totalEstimatedHours}h</span>
+                    <span className="text-xs text-slate-400 font-medium">en sitio</span>
+                 </div>
+            </div>
+
+            <div className="flex flex-row gap-2 justify-between items-center">
+                {/* Split Time Indicators */}
+                <div className="flex flex-row gap-1 sm:gap-2 overflow-x-auto no-scrollbar">
+                    <div className="flex items-center gap-1 bg-emerald-50 px-2 py-1.5 rounded-lg border border-emerald-100 whitespace-nowrap">
+                        <CheckCircle2 size={12} className="text-emerald-600" />
+                        <span className="text-xs font-bold text-emerald-800">{hoursImportant}h</span>
+                    </div>
+                    <div className="flex items-center gap-1 bg-amber-50 px-2 py-1.5 rounded-lg border border-amber-100 whitespace-nowrap">
+                        <MinusCircle size={12} className="text-amber-600" />
+                        <span className="text-xs font-bold text-amber-800">{hoursNotImportant}h</span>
+                    </div>
+                    <div className="flex items-center gap-1 bg-blue-50 px-2 py-1.5 rounded-lg border border-blue-100 whitespace-nowrap">
+                        <Users size={12} className="text-blue-600" />
+                        <span className="text-xs font-bold text-blue-800">{hoursMeetings}h</span>
+                    </div>
+                </div>
+
+                <button 
+                    onClick={handleExport}
+                    className="bg-blue-600 hover:bg-blue-700 active:scale-95 transition-all text-white px-6 py-2 rounded-lg font-bold text-sm shadow-lg shadow-blue-600/20 whitespace-nowrap flex-shrink-0 flex items-center gap-2"
+                >
+                    <Share2 size={16} />
+                    <span>Compartir</span>
+                </button>
+            </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;
