@@ -1,277 +1,331 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Download, Filter, Search, Menu, CheckCircle2, MinusCircle, Users, Share2 } from 'lucide-react';
-import { INITIAL_DATA } from './constants';
-import { ImportanceLevel, ServiceRequest } from './types';
-import { RequestCard } from './components/RequestCard';
-import { Dashboard } from './components/Dashboard';
-
-enum FilterState {
-  ALL = 'all',
-  PENDING = 'pending',
-  REVIEWED = 'reviewed',
-}
-
-const App: React.FC = () => {
-  const [data, setData] = useState<ServiceRequest[]>(INITIAL_DATA);
-  const [filter, setFilter] = useState<FilterState>(FilterState.ALL);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [isScrolled, setIsScrolled] = useState(false);
-
-  // Scroll detection for sticky header styling
-  useEffect(() => {
-    const handleScroll = () => {
-      setIsScrolled(window.scrollY > 10);
-    };
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
-
-  const handleUpdateImportance = (id: string, level: ImportanceLevel) => {
-    setData(prev => prev.map(item => 
-      item.id === id ? { ...item, importance: level } : item
-    ));
-  };
-
-  // Filter Logic
-  const filteredData = useMemo(() => {
-    return data.filter(item => {
-        const matchesSearch = 
-            item.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            item.sapId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            item.area.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            item.requester.toLowerCase().includes(searchTerm.toLowerCase());
-
-        if (!matchesSearch) return false;
-
-        if (filter === FilterState.PENDING) return item.importance === ImportanceLevel.UNSET;
-        if (filter === FilterState.REVIEWED) return item.importance !== ImportanceLevel.UNSET;
-        return true;
-    });
-  }, [data, filter, searchTerm]);
-
-  // Grouping Logic: Group filtered data by requester
-  const groupedData = useMemo(() => {
-    return filteredData.reduce((acc, item) => {
-        const key = item.requester || 'Sin Asignar';
-        if (!acc[key]) {
-            acc[key] = [];
-        }
-        acc[key].push(item);
-        return acc;
-    }, {} as Record<string, ServiceRequest[]>);
-  }, [filteredData]);
-
-  // Calculation Logic
-  const importantItems = data.filter(i => i.importance === ImportanceLevel.IMPORTANT);
-  const notImportantItems = data.filter(i => i.importance === ImportanceLevel.NOT_IMPORTANT);
-
-  // Identify unique owners involved in selected items (Important OR Not Important)
-  const activeOwners = new Set(
-    data
-        .filter(i => i.importance === ImportanceLevel.IMPORTANT || i.importance === ImportanceLevel.NOT_IMPORTANT)
-        .map(i => i.requester)
-  );
-
-  const hoursImportant = importantItems.length * 2;
-  const hoursNotImportant = notImportantItems.length * 2;
-  const hoursMeetings = activeOwners.size * 1; // 1 hour per owner involved
-  const totalEstimatedHours = hoursImportant + hoursNotImportant + hoursMeetings;
-
-  const handleExport = async () => {
-    const summaryTextImportant = importantItems.map(i => `[PRIORIDAD] ${i.sapId} (${i.requester}): ${i.description}`).join('\n');
-    const summaryTextNotImportant = notImportantItems.map(i => `[SECUNDARIO] ${i.sapId} (${i.requester}): ${i.description}`).join('\n');
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Evaluador MEOSA</title>
     
-    // Create list of owners for the report
-    const ownersList = Array.from(activeOwners).map(o => `- ${o}`).join('\n');
+    <!-- Librerías desde CDN (No requiere instalación) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+    
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+    <div id="root"></div>
 
-    // Create detailed export content
-    const fileContent = `REPORTE DE SELECCIÓN MEOSA
-===========================================
-Fecha: ${new Date().toLocaleDateString()}
-
-RESUMEN DE TIEMPOS DE LEVANTAMIENTO
--------------------------------------------
-1. Levantamiento en Campo (Prioridad):  ${hoursImportant} Horas (2h x ${importantItems.length} alcances)
-2. Levantamiento en Campo (Secundario): ${hoursNotImportant} Horas (2h x ${notImportantItems.length} alcances)
-3. Juntas de Alineación con Usuarios:   ${hoursMeetings} Horas (1h x ${activeOwners.size} usuarios)
-
-TIEMPO TOTAL ESTIMADO:                  ${totalEstimatedHours} Horas
--------------------------------------------
-
-USUARIOS INVOLUCRADOS (1hr Junta c/u):
-${ownersList}
-
-
-DETALLE DE ALCANCES - PRIORIDAD ALTA
--------------------------------------------
-${importantItems.length > 0 ? summaryTextImportant : '(Ninguno seleccionado)'}
-
-
-DETALLE DE ALCANCES - NO URGENTES
--------------------------------------------
-${notImportantItems.length > 0 ? summaryTextNotImportant : '(Ninguno seleccionado)'}
-`;
-
-    // Try to use the native Web Share API (Mobile friendly)
-    if (navigator.share && navigator.canShare && navigator.canShare({ text: fileContent })) {
-      try {
-        await navigator.share({
-          title: 'Plan de Levantamiento MEOSA',
-          text: fileContent,
-        });
-        return; // Success, exit function
-      } catch (error) {
-        console.log('Error sharing:', error);
-        // Fallback to download if user cancelled or error
-      }
-    }
-
-    // Fallback: Download as text file
-    const blob = new Blob([fileContent], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `MEOSA_Plan_Levantamiento_${new Date().toISOString().slice(0,10)}.txt`;
-    a.click();
-  };
-
-  return (
-    <div className="min-h-screen pb-32 md:pb-24">
-      {/* Header */}
-      <header className={`fixed top-0 left-0 right-0 z-50 transition-all duration-200 ${isScrolled ? 'bg-white shadow-md py-3' : 'bg-slate-50 py-4'}`}>
-        <div className="max-w-3xl mx-auto px-4 flex justify-between items-center">
-            <div className="flex items-center gap-3">
-                <div className="bg-blue-600 p-2 rounded-lg text-white">
-                    <Menu size={20} />
-                </div>
-                <div>
-                    <h1 className="text-lg font-bold text-slate-800 leading-none">Evaluador MEOSA</h1>
-                    <p className="text-xs text-slate-500 mt-0.5">Gestión de priorización de propuestas comerciales</p>
-                </div>
-            </div>
-            <button 
-                onClick={handleExport}
-                className="text-blue-600 p-2 rounded-full hover:bg-blue-50"
-                aria-label="Exportar"
+    <script type="text/babel">
+        // --- 1. ICONOS (SVG Directos para evitar dependencias externas) ---
+        const Icon = ({ path, className = "", size = 24 }) => (
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                width={size} height={size} 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                className={className}
             >
-                <Share2 size={22} />
-            </button>
-        </div>
-      </header>
+                {path}
+            </svg>
+        );
 
-      {/* Main Content */}
-      <main className="max-w-3xl mx-auto px-4 pt-20">
-        <Dashboard data={data} />
+        const Icons = {
+            Menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+            Search: <><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></>,
+            Filter: <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />,
+            Share2: <><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></>,
+            CheckCircle2: <><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></>,
+            MinusCircle: <><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></>,
+            XCircle: <><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></>,
+            ChevronDown: <path d="m6 9 6 6 6-6"/>,
+            ChevronUp: <path d="m18 15-6-6-6 6"/>,
+            MapPin: <><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></>,
+            Clock: <><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></>,
+            Users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
+            Construction: <><rect x="2" y="6" width="20" height="8" rx="1"/><path d="M17 14v7"/><path d="M7 14v7"/><path d="M17 3v3"/><path d="M7 3v3"/><path d="M10 14 2.3 6.3"/><path d="m14 6 7.7 7.7"/><path d="m8 6 8 8"/></>,
+            Info: <><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></>,
+            User: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
+            AlertCircle: <><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></>
+        };
 
-        {/* Filters & Search */}
-        <div className="sticky top-[72px] z-40 bg-slate-50/95 backdrop-blur-sm py-2 mb-4 -mx-4 px-4 border-b border-slate-100">
-            <div className="relative mb-3">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                <input 
-                    type="text" 
-                    placeholder="Buscar por Solicitante, ID o área..." 
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-            </div>
-            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                <button 
-                    onClick={() => setFilter(FilterState.ALL)}
-                    className={`px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filter === FilterState.ALL ? 'bg-slate-800 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-600'}`}
-                >
-                    Todos ({data.length})
-                </button>
-                <button 
-                    onClick={() => setFilter(FilterState.PENDING)}
-                    className={`px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filter === FilterState.PENDING ? 'bg-slate-800 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-600'}`}
-                >
-                    Pendientes ({data.filter(i => i.importance === ImportanceLevel.UNSET).length})
-                </button>
-                <button 
-                    onClick={() => setFilter(FilterState.REVIEWED)}
-                    className={`px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filter === FilterState.REVIEWED ? 'bg-slate-800 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-600'}`}
-                >
-                    Revisados ({data.filter(i => i.importance !== ImportanceLevel.UNSET).length})
-                </button>
-            </div>
-        </div>
+        const Lucide = (name, props) => <Icon path={Icons[name]} {...props} />;
 
-        {/* Grouped List */}
-        <div className="space-y-6">
-            {Object.keys(groupedData).length > 0 ? (
-                (Object.entries(groupedData) as [string, ServiceRequest[]][]).map(([requester, items]) => (
-                    <div key={requester} className="animate-in fade-in duration-500">
-                        <div className="flex items-center gap-2 mb-3 ml-1 sticky top-[135px] z-30 py-2 bg-slate-50/90 backdrop-blur w-fit pr-4 rounded-r-full">
-                            <div className="bg-indigo-100 p-1.5 rounded-full">
-                                <Users size={14} className="text-indigo-600" />
-                            </div>
-                            <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">
-                                {requester} 
-                                <span className="ml-2 text-slate-400 font-normal text-xs normal-case">({items.length} items)</span>
-                            </h2>
+
+        // --- 2. CONSTANTES Y TIPOS ---
+        const ImportanceLevel = {
+            UNSET: 0,
+            IMPORTANT: 1,
+            NOT_IMPORTANT: 2,
+            DISCARDED: 3,
+        };
+
+        const INITIAL_DATA = [
+            { id: '1', sapId: 'SO00114001ML', description: 'Ampliación de plataforma al elevador de materia prima', equipment: 'Elevador de cangilones', area: 'Molino / Proceso', requester: 'Mauricio León', type: 'Mecánico / Estructural', operationalImpact: 'Alto', safetyImpact: 'Alto', technicalComplexity: 'Alta', definitionLevel: 'Claro', requiresSurvey: true, comments: 'Definir detalles de fijación, barandales y acceso seguro', importance: 0 },
+            { id: '2', sapId: 'SO00111879ML', description: 'Mantto a elevador E7 para dejarlo funcionando correctamente', equipment: 'Elevador E7 / transportador', area: 'Molino / Proceso', requester: 'Dante Saul Santamaría', type: 'Mecánico / Estructural', operationalImpact: 'Alto', safetyImpact: 'Alto', technicalComplexity: 'Alta', definitionLevel: 'Claro', requiresSurvey: true, comments: 'Revisar interferencias, puntos de descarga, anclajes', importance: 0 },
+            { id: '3', sapId: 'SO00111940ML', description: 'Servicio de peritaje para evaluar el estado del piso en nivel de molino 1', equipment: 'Piso nivel molino 1', area: 'Molino', requester: 'Parrill', type: 'Estructural', operationalImpact: 'Alto', safetyImpact: 'Alto', technicalComplexity: 'Alta', definitionLevel: 'Claro', requiresSurvey: true, comments: 'Requiere perito estructurista con firma', importance: 0 },
+            { id: '4', sapId: 'SO00113251ML', description: 'Suministro e instalación de sistema de transporte para envasadora VICTOR', equipment: 'Transportador envasadora VICTOR', area: 'Área de envasado', requester: 'Moisés Hernández', type: 'Mecánico', operationalImpact: 'Alto', safetyImpact: 'Medio', technicalComplexity: 'Media', definitionLevel: 'Difuso', requiresSurvey: 'Sí (conceptual)', comments: 'Definir puntos de carga/descarga, layout disponible', importance: 0 },
+            { id: '5', sapId: 'PENDIENTE', description: 'Mantto a dos elevadores de saborizante y microingredientes', equipment: 'Elevadores de saborizante', area: 'Proceso acabado', requester: '(pendiente)', type: 'Mecánico / Estructural', operationalImpact: 'Medio', safetyImpact: 'Alto', technicalComplexity: 'Media', definitionLevel: 'Medio', requiresSurvey: true, comments: 'Definir ubicación exacta de los elevadores', importance: 0 },
+            { id: '6', sapId: 'SO00112812ML', description: 'Servicio de automatización para colocar indicadores visuales', equipment: 'Sistema de indicadores', area: 'Planta WET', requester: 'Jorge Ricardo Alonso', type: 'Eléctrico', operationalImpact: 'Medio', safetyImpact: 'Medio', technicalComplexity: 'Media', definitionLevel: 'Medio', requiresSurvey: true, comments: 'Levantar ubicación de botoneras, señales requeridas', importance: 0 },
+            { id: '7', sapId: 'SO00112694ML', description: 'Remodelación de baños de hombres en planta baja de oficinas', equipment: 'Baños de hombres', area: 'Oficinas planta baja', requester: 'Dante Saul Santamaría', type: 'Civil', operationalImpact: 'Bajo', safetyImpact: 'Medio', technicalComplexity: 'Media', definitionLevel: 'Claro', requiresSurvey: false, comments: 'Puede ser atendido por contratista civil', importance: 0 },
+            { id: '8', sapId: 'SO00113398ML', description: 'Reparación de partes dañadas de circuito de camiones', equipment: 'Circuito vial', area: 'Patio / acceso', requester: 'Moisés Hernández', type: 'Civil', operationalImpact: 'Medio', safetyImpact: 'Alto', technicalComplexity: 'Media', definitionLevel: 'Medio', requiresSurvey: 'Por definir', comments: 'Revisar daños en pavimento, defensas, drenajes', importance: 0 },
+            { id: '9', sapId: 'SO00113444ML', description: 'Servicio de pailería para suministro y cambio de parte inferior de tolvas', equipment: 'Tolvas pulmón línea 2', area: 'Proceso materia prima', requester: 'Moisés Hernández', type: 'Mecánico', operationalImpact: 'Alto', safetyImpact: 'Alto', technicalComplexity: 'Alta', definitionLevel: 'Medio', requiresSurvey: true, comments: 'Levantar geometría actual, materiales, accesos', importance: 0 },
+            { id: '10', sapId: 'SO00113073ML', description: 'Reparación de 2 andenes de materia prima', equipment: 'Andenes', area: 'Área de recibo', requester: 'Moisés Hernández', type: 'Civil', operationalImpact: 'Medio', safetyImpact: 'Alto', technicalComplexity: 'Media', definitionLevel: 'Difuso', requiresSurvey: true, comments: 'Levantar daños estructurales, elementos metálicos', importance: 0 },
+            { id: '11', sapId: 'SO00113417ML', description: 'Reparación de piso de área de envasado', equipment: 'Piso área de envasado', area: 'Área de envasado', requester: 'Moisés Hernández', type: 'Civil', operationalImpact: 'Alto', safetyImpact: 'Alto', technicalComplexity: 'Media', definitionLevel: 'Difuso', requiresSurvey: true, comments: 'Identificar zonas dañadas, tipo de recubrimiento', importance: 0 },
+            { id: '12', sapId: 'SO00113788ML', description: 'Colocación de paso de gato/plataforma en parte alta de tanque 10', equipment: 'Tanque 10', area: 'Área de tanques', requester: 'José Luis Santos', type: 'Estructural', operationalImpact: 'Medio', safetyImpact: 'Alto', technicalComplexity: 'Media', definitionLevel: 'Claro', requiresSurvey: true, comments: 'Definir geometría de plataforma, puntos de anclaje', importance: 0 },
+            { id: '13', sapId: 'SO00113788ML', description: 'Colocación de paso de gato/plataforma en parte alta de tanque 11', equipment: 'Tanque 11', area: 'Área de tanques', requester: 'José Luis Santos', type: 'Estructural', operationalImpact: 'Medio', safetyImpact: 'Alto', technicalComplexity: 'Media', definitionLevel: 'Claro', requiresSurvey: true, comments: 'Similar a tanque 10; evaluar posibilidad de solución', importance: 0 },
+            { id: '14', sapId: 'SO00113787ML', description: 'Colocación de rampa en elevador de material ensacado', equipment: 'Elevador de material', area: 'Área de ensacado', requester: 'José Luis Santos', type: 'Mecánico', operationalImpact: 'Medio', safetyImpact: 'Medio', technicalComplexity: 'Media', definitionLevel: 'Difuso', requiresSurvey: 'Por definir', comments: 'Levantar espacio disponible, pendiente de rampa', importance: 0 },
+        ];
+
+
+        // --- 3. COMPONENTES ---
+
+        // REQUEST CARD
+        const RequestCard = ({ item, onUpdate }) => {
+            const [expanded, setExpanded] = React.useState(false);
+
+            const getBorderColor = () => {
+                switch (item.importance) {
+                    case ImportanceLevel.IMPORTANT: return 'border-emerald-500';
+                    case ImportanceLevel.NOT_IMPORTANT: return 'border-amber-400';
+                    case ImportanceLevel.DISCARDED: return 'border-rose-400';
+                    default: return 'border-slate-200';
+                }
+            };
+
+            const getStatusBadge = () => {
+                switch (item.importance) {
+                    case ImportanceLevel.IMPORTANT: return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Importante</span>;
+                    case ImportanceLevel.NOT_IMPORTANT: return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">No Importante</span>;
+                    case ImportanceLevel.DISCARDED: return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-100 text-rose-800">Descartado</span>;
+                    default: return <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">Pendiente</span>;
+                }
+            };
+
+            return (
+                <div className={`bg-white rounded-xl shadow-sm border-l-4 ${getBorderColor()} overflow-hidden transition-all duration-300`}>
+                    <div className="p-4 pb-2">
+                        <div className="flex justify-between items-start mb-2">
+                            <span className="font-mono text-xs text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">{item.sapId}</span>
+                            {getStatusBadge()}
                         </div>
-                        <div className="space-y-3">
-                            {items.map(item => (
-                                <RequestCard 
-                                    key={item.id} 
-                                    item={item} 
-                                    onUpdate={handleUpdateImportance}
-                                />
+                        <h3 className="text-slate-900 font-semibold leading-snug mb-3">{item.description}</h3>
+                        <div className="flex flex-wrap gap-y-2 gap-x-4 text-xs text-slate-500 mb-4">
+                            <div className="flex items-center gap-1"><Lucide name="MapPin" size={14} className="text-slate-400" /><span>{item.area}</span></div>
+                            <div className="flex items-center gap-1"><Lucide name="Clock" size={14} className="text-blue-400" /><span className="text-blue-600 font-medium">Est. 2h visita</span></div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 mb-2">
+                            <button onClick={() => onUpdate(item.id, ImportanceLevel.IMPORTANT)} className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all ${item.importance === ImportanceLevel.IMPORTANT ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-inner' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}><Lucide name="CheckCircle2" size={20} className="mb-1" /><span className="text-[10px] font-bold uppercase">Importante</span></button>
+                            <button onClick={() => onUpdate(item.id, ImportanceLevel.NOT_IMPORTANT)} className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all ${item.importance === ImportanceLevel.NOT_IMPORTANT ? 'bg-amber-50 border-amber-500 text-amber-700 shadow-inner' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}><Lucide name="MinusCircle" size={20} className="mb-1" /><span className="text-[10px] font-bold uppercase">No Urgente</span></button>
+                            <button onClick={() => onUpdate(item.id, ImportanceLevel.DISCARDED)} className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all ${item.importance === ImportanceLevel.DISCARDED ? 'bg-rose-50 border-rose-500 text-rose-700 shadow-inner' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}><Lucide name="XCircle" size={20} className="mb-1" /><span className="text-[10px] font-bold uppercase">Descartar</span></button>
+                        </div>
+                    </div>
+                    <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-center py-2 bg-slate-50 border-t border-slate-100 text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+                        {expanded ? <><span className="mr-1">Ocultar detalles</span><Lucide name="ChevronUp" size={14} /></> : <><span className="mr-1">Ver detalles técnicos</span><Lucide name="ChevronDown" size={14} /></>}
+                    </button>
+                    {expanded && (
+                        <div className="px-4 py-3 bg-slate-50 border-t border-slate-100 text-sm animate-in slide-in-from-top-2 duration-200">
+                            <div className="grid grid-cols-2 gap-4 mb-3">
+                                <div className="bg-white p-2 rounded border border-slate-100"><p className="text-[10px] uppercase text-slate-400 font-bold mb-1">Impacto Operación</p><p className={`font-semibold ${item.operationalImpact === 'Alto' ? 'text-rose-600' : 'text-slate-700'}`}>{item.operationalImpact}</p></div>
+                                <div className="bg-white p-2 rounded border border-slate-100"><p className="text-[10px] uppercase text-slate-400 font-bold mb-1">Seguridad</p><p className={`font-semibold ${item.safetyImpact === 'Alto' ? 'text-rose-600' : 'text-slate-700'}`}>{item.safetyImpact}</p></div>
+                            </div>
+                            <div className="mb-3 space-y-2">
+                                <div className="flex items-center gap-2"><Lucide name="User" size={14} className="text-slate-400"/><span className="text-xs font-bold text-slate-700">Solicitante:</span><span className="text-xs text-slate-600">{item.requester}</span></div>
+                                <div className="flex items-center gap-2"><Lucide name="Construction" size={14} className="text-slate-400"/><span className="text-xs font-bold text-slate-700">Tipo:</span><span className="text-xs text-slate-600">{item.type}</span></div>
+                            </div>
+                            {item.comments && <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-blue-800 text-xs leading-relaxed"><strong className="block mb-1 text-blue-900">Comentarios / Alcance:</strong>{item.comments}</div>}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // DASHBOARD
+        const Dashboard = ({ data }) => {
+            const { PieChart, Pie, Cell, ResponsiveContainer } = window.Recharts;
+            
+            const stats = React.useMemo(() => {
+                const s = { unset: 0, important: 0, notImportant: 0, discarded: 0, activeOwners: new Set() };
+                data.forEach(item => {
+                    if (item.importance === ImportanceLevel.UNSET) s.unset++;
+                    if (item.importance === ImportanceLevel.IMPORTANT) { s.important++; s.activeOwners.add(item.requester); }
+                    if (item.importance === ImportanceLevel.NOT_IMPORTANT) { s.notImportant++; s.activeOwners.add(item.requester); }
+                    if (item.importance === ImportanceLevel.DISCARDED) s.discarded++;
+                });
+                return s;
+            }, [data]);
+
+            const chartData = [
+                { name: 'Pendiente', value: stats.unset, color: '#94a3b8' },
+                { name: 'Importante', value: stats.important, color: '#10b981' },
+                { name: 'No Importante', value: stats.notImportant, color: '#f59e0b' },
+                { name: 'Descartado', value: stats.discarded, color: '#f43f5e' },
+            ].filter(d => d.value > 0);
+
+            const total = data.length;
+            const progress = Math.round(((total - stats.unset) / total) * 100);
+            const hoursImportant = stats.important * 2;
+            const hoursNotImportant = stats.notImportant * 2;
+            const hoursMeetings = stats.activeOwners.size * 1;
+
+            return (
+                <div className="bg-white rounded-xl shadow-sm p-4 mb-6 border border-slate-100">
+                    <div className="flex justify-between items-center mb-4">
+                        <div><h2 className="text-lg font-bold text-slate-800">Resumen</h2><p className="text-sm text-slate-500">{total - stats.unset} de {total} revisados</p></div>
+                        <div className="text-right"><span className="text-2xl font-black text-slate-900">{progress}%</span></div>
+                    </div>
+                    <div className="grid grid-cols-5 gap-4 mb-4">
+                        <div className="col-span-2 h-32 w-full relative">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                    <Pie data={chartData} innerRadius={30} outerRadius={50} paddingAngle={5} dataKey="value" stroke="none">
+                                        {chartData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
+                                    </Pie>
+                                </PieChart>
+                            </ResponsiveContainer>
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="text-center"><span className="text-xs text-slate-400 font-bold block">TOTAL</span><span className="text-sm font-bold text-slate-600">{total}</span></div></div>
+                        </div>
+                        <div className="col-span-3 flex flex-col gap-2 justify-center">
+                            <div className="bg-emerald-50 rounded-lg p-1.5 flex flex-row items-center justify-between border border-emerald-100 px-2">
+                                <div className="flex flex-col"><span className="text-[9px] font-bold text-emerald-600 uppercase tracking-wide">Prioridad</span><span className="text-lg font-black text-emerald-700 leading-none">{hoursImportant}h</span></div>
+                                <Lucide name="Clock" size={16} className="text-emerald-400" />
+                            </div>
+                            <div className="bg-amber-50 rounded-lg p-1.5 flex flex-row items-center justify-between border border-amber-100 px-2">
+                                <div className="flex flex-col"><span className="text-[9px] font-bold text-amber-600 uppercase tracking-wide">Secundario</span><span className="text-lg font-black text-amber-700 leading-none">{hoursNotImportant}h</span></div>
+                                <Lucide name="Clock" size={16} className="text-amber-400" />
+                            </div>
+                            <div className="bg-blue-50 rounded-lg p-1.5 flex flex-row items-center justify-between border border-blue-100 px-2">
+                                <div className="flex flex-col"><span className="text-[9px] font-bold text-blue-600 uppercase tracking-wide">Juntas</span><span className="text-lg font-black text-blue-700 leading-none">{hoursMeetings}h</span></div>
+                                <Lucide name="Users" size={16} className="text-blue-400" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // MAIN APP
+        const App = () => {
+            const [data, setData] = React.useState(INITIAL_DATA);
+            const [filter, setFilter] = React.useState('all');
+            const [searchTerm, setSearchTerm] = React.useState('');
+            const [isScrolled, setIsScrolled] = React.useState(false);
+
+            React.useEffect(() => {
+                const handleScroll = () => setIsScrolled(window.scrollY > 10);
+                window.addEventListener('scroll', handleScroll);
+                return () => window.removeEventListener('scroll', handleScroll);
+            }, []);
+
+            const handleUpdateImportance = (id, level) => {
+                setData(prev => prev.map(item => item.id === id ? { ...item, importance: level } : item));
+            };
+
+            const filteredData = React.useMemo(() => {
+                return data.filter(item => {
+                    const matchesSearch = item.description.toLowerCase().includes(searchTerm.toLowerCase()) || item.sapId.toLowerCase().includes(searchTerm.toLowerCase()) || item.requester.toLowerCase().includes(searchTerm.toLowerCase());
+                    if (!matchesSearch) return false;
+                    if (filter === 'pending') return item.importance === ImportanceLevel.UNSET;
+                    if (filter === 'reviewed') return item.importance !== ImportanceLevel.UNSET;
+                    return true;
+                });
+            }, [data, filter, searchTerm]);
+
+            const groupedData = React.useMemo(() => {
+                return filteredData.reduce((acc, item) => {
+                    const key = item.requester || 'Sin Asignar';
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(item);
+                    return acc;
+                }, {});
+            }, [filteredData]);
+
+            const importantItems = data.filter(i => i.importance === ImportanceLevel.IMPORTANT);
+            const notImportantItems = data.filter(i => i.importance === ImportanceLevel.NOT_IMPORTANT);
+            const activeOwners = new Set(data.filter(i => i.importance === ImportanceLevel.IMPORTANT || i.importance === ImportanceLevel.NOT_IMPORTANT).map(i => i.requester));
+            
+            const hoursImportant = importantItems.length * 2;
+            const hoursNotImportant = notImportantItems.length * 2;
+            const hoursMeetings = activeOwners.size * 1;
+            const totalEstimatedHours = hoursImportant + hoursNotImportant + hoursMeetings;
+
+            const handleExport = async () => {
+                const ownersList = Array.from(activeOwners).map(o => `- ${o}`).join('\n');
+                const fileContent = `REPORTE DE SELECCIÓN MEOSA\n===========================================\nFecha: ${new Date().toLocaleDateString()}\n\nRESUMEN DE TIEMPOS DE LEVANTAMIENTO\n-------------------------------------------\n1. Levantamiento en Campo (Prioridad):  ${hoursImportant} Horas\n2. Levantamiento en Campo (Secundario): ${hoursNotImportant} Horas\n3. Juntas de Alineación con Usuarios:   ${hoursMeetings} Horas\n\nTIEMPO TOTAL ESTIMADO:                  ${totalEstimatedHours} Horas\n-------------------------------------------\n\nUSUARIOS INVOLUCRADOS:\n${ownersList}`;
+                
+                if (navigator.share && navigator.canShare && navigator.canShare({ text: fileContent })) {
+                    try { await navigator.share({ title: 'Plan MEOSA', text: fileContent }); return; } catch (e) {}
+                }
+                const blob = new Blob([fileContent], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `MEOSA_Plan.txt`;
+                a.click();
+            };
+
+            return (
+                <div className="min-h-screen pb-32 md:pb-24">
+                    <header className={`fixed top-0 left-0 right-0 z-50 transition-all duration-200 ${isScrolled ? 'bg-white shadow-md py-3' : 'bg-slate-50 py-4'}`}>
+                        <div className="max-w-3xl mx-auto px-4 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-blue-600 p-2 rounded-lg text-white"><Lucide name="Menu" size={20} /></div>
+                                <div><h1 className="text-lg font-bold text-slate-800 leading-none">Evaluador MEOSA</h1><p className="text-xs text-slate-500 mt-0.5">Gestión de priorización comercial</p></div>
+                            </div>
+                            <button onClick={handleExport} className="text-blue-600 p-2 rounded-full hover:bg-blue-50"><Lucide name="Share2" size={22} /></button>
+                        </div>
+                    </header>
+                    <main className="max-w-3xl mx-auto px-4 pt-20">
+                        <Dashboard data={data} />
+                        <div className="sticky top-[72px] z-40 bg-slate-50/95 backdrop-blur-sm py-2 mb-4 -mx-4 px-4 border-b border-slate-100">
+                            <div className="relative mb-3">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><Lucide name="Search" size={16}/></span>
+                                <input type="text" placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                            </div>
+                            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                                <button onClick={() => setFilter('all')} className={`px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filter === 'all' ? 'bg-slate-800 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-600'}`}>Todos ({data.length})</button>
+                                <button onClick={() => setFilter('pending')} className={`px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${filter === 'pending' ? 'bg-slate-800 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-600'}`}>Pendientes ({data.filter(i => i.importance === ImportanceLevel.UNSET).length})</button>
+                            </div>
+                        </div>
+                        <div className="space-y-6">
+                            {Object.entries(groupedData).map(([requester, items]) => (
+                                <div key={requester} className="animate-in fade-in duration-500">
+                                    <div className="flex items-center gap-2 mb-3 ml-1 sticky top-[135px] z-30 py-2 bg-slate-50/90 backdrop-blur w-fit pr-4 rounded-r-full">
+                                        <div className="bg-indigo-100 p-1.5 rounded-full"><Lucide name="Users" size={14} className="text-indigo-600" /></div>
+                                        <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">{requester} <span className="ml-2 text-slate-400 font-normal text-xs normal-case">({items.length} items)</span></h2>
+                                    </div>
+                                    <div className="space-y-3">{items.map(item => <RequestCard key={item.id} item={item} onUpdate={handleUpdateImportance} />)}</div>
+                                </div>
                             ))}
                         </div>
-                    </div>
-                ))
-            ) : (
-                <div className="text-center py-12 text-slate-400">
-                    <Filter size={48} className="mx-auto mb-3 opacity-20" />
-                    <p>No se encontraron cotizaciones con los filtros actuales.</p>
-                </div>
-            )}
-        </div>
-      </main>
-
-      {/* Sticky Bottom Action */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-3 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-50">
-        <div className="max-w-3xl mx-auto flex flex-col gap-2">
-            
-            <div className="flex justify-between items-center w-full mb-1">
-                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Estimado</span>
-                 <div className="flex items-baseline gap-1">
-                    <span className="text-2xl font-black text-slate-900">{totalEstimatedHours}h</span>
-                    <span className="text-xs text-slate-400 font-medium">en sitio</span>
-                 </div>
-            </div>
-
-            <div className="flex flex-row gap-2 justify-between items-center">
-                {/* Split Time Indicators */}
-                <div className="flex flex-row gap-1 sm:gap-2 overflow-x-auto no-scrollbar">
-                    <div className="flex items-center gap-1 bg-emerald-50 px-2 py-1.5 rounded-lg border border-emerald-100 whitespace-nowrap">
-                        <CheckCircle2 size={12} className="text-emerald-600" />
-                        <span className="text-xs font-bold text-emerald-800">{hoursImportant}h</span>
-                    </div>
-                    <div className="flex items-center gap-1 bg-amber-50 px-2 py-1.5 rounded-lg border border-amber-100 whitespace-nowrap">
-                        <MinusCircle size={12} className="text-amber-600" />
-                        <span className="text-xs font-bold text-amber-800">{hoursNotImportant}h</span>
-                    </div>
-                    <div className="flex items-center gap-1 bg-blue-50 px-2 py-1.5 rounded-lg border border-blue-100 whitespace-nowrap">
-                        <Users size={12} className="text-blue-600" />
-                        <span className="text-xs font-bold text-blue-800">{hoursMeetings}h</span>
+                    </main>
+                    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-3 shadow-lg z-50">
+                        <div className="max-w-3xl mx-auto flex flex-col gap-2">
+                            <div className="flex justify-between items-center w-full mb-1"><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Estimado</span><div className="flex items-baseline gap-1"><span className="text-2xl font-black text-slate-900">{totalEstimatedHours}h</span><span className="text-xs text-slate-400 font-medium">en sitio</span></div></div>
+                            <div className="flex flex-row gap-2 justify-between items-center">
+                                <div className="flex flex-row gap-1 overflow-x-auto no-scrollbar">
+                                    <div className="flex items-center gap-1 bg-emerald-50 px-2 py-1.5 rounded-lg border border-emerald-100 whitespace-nowrap"><Lucide name="CheckCircle2" size={12} className="text-emerald-600" /><span className="text-xs font-bold text-emerald-800">{hoursImportant}h</span></div>
+                                    <div className="flex items-center gap-1 bg-amber-50 px-2 py-1.5 rounded-lg border border-amber-100 whitespace-nowrap"><Lucide name="MinusCircle" size={12} className="text-amber-600" /><span className="text-xs font-bold text-amber-800">{hoursNotImportant}h</span></div>
+                                    <div className="flex items-center gap-1 bg-blue-50 px-2 py-1.5 rounded-lg border border-blue-100 whitespace-nowrap"><Lucide name="Users" size={12} className="text-blue-600" /><span className="text-xs font-bold text-blue-800">{hoursMeetings}h</span></div>
+                                </div>
+                                <button onClick={handleExport} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold text-sm shadow-lg whitespace-nowrap flex-shrink-0 flex items-center gap-2"><Lucide name="Share2" size={16} /><span>Compartir</span></button>
+                            </div>
+                        </div>
                     </div>
                 </div>
+            );
+        };
 
-                <button 
-                    onClick={handleExport}
-                    className="bg-blue-600 hover:bg-blue-700 active:scale-95 transition-all text-white px-6 py-2 rounded-lg font-bold text-sm shadow-lg shadow-blue-600/20 whitespace-nowrap flex-shrink-0 flex items-center gap-2"
-                >
-                    <Share2 size={16} />
-                    <span>Compartir</span>
-                </button>
-            </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default App;
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
